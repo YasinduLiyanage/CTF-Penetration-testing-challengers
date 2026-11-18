@@ -1,0 +1,76 @@
+# =====================================================================
+#  RAVEN//TRACE — S6 "WATCHTOWER"  ::  docker-compose
+# ---------------------------------------------------------------------
+#  Segmented internal network එකක්. Player කෙනෙක් foothold එකට SSH
+#  කරලා, C2 එක්ක කතා කරලා, watchtower-gw හරහා pivot කරලා, WATCHTOWER
+#  (monitoring segment) එකෙන් flag එක ගන්න ඕන.
+#
+#  Networks (3):
+#     edge  : player-facing. foothold විතරයි මෙතන + port publish.
+#     core  : foothold + c2 + watchtower-gw. internal (no internet).
+#     mon   : watchtower-gw + watchtower. internal. WATCHTOWER මෙතන විතරයි.
+#
+#  Segmentation එකේ හරය:
+#     foothold      -> edge + core        (watchtower ට reach කරන්න බෑ)
+#     c2            -> core               (player ට කෙලින්ම reach කරන්න බෑ)
+#     watchtower-gw -> core + mon         (pivot bridge එක)
+#     watchtower    -> mon විතරයි          (gw හරහා විතරයි reach වෙන්නේ)
+#
+#  Run:    docker compose up -d --build
+#  Reset:  docker compose down && docker compose up -d --build
+# =====================================================================
+
+services:
+
+  # -------- C2 (implant command-and-control, mock) --------
+  c2:
+    build: ./c2
+    container_name: rt_c2
+    env_file: .env
+    environment:
+      GW_HOST: watchtower-gw
+      WT_HOST: watchtower
+      WT_PORT: "9000"
+    networks: [core]
+    restart: unless-stopped
+
+  # -------- WATCHTOWER (segmented monitoring service, holds flag) --------
+  watchtower:
+    build: ./watchtower
+    container_name: rt_watchtower
+    env_file: .env          # WATCHTOWER_API_KEY මෙතනින් එනවා
+    networks: [mon]
+    restart: unless-stopped
+
+  # -------- foothold (player entry — SSH, from S5 creds) --------
+  foothold:
+    build: ./foothold
+    container_name: rt_foothold
+    environment:
+      SSH_USER: ${FOOTHOLD_USER}
+      SSH_PASS: ${FOOTHOLD_PASS}
+    ports:
+      - "2222:22"           # player: ssh j.portal@<host> -p 2222
+    networks: [edge, core]
+    restart: unless-stopped
+
+  # -------- watchtower-gw (pivot bridge: core <-> mon) --------
+  #  foothold එකේ image එකම පාවිච්චි කරනවා (SSH host), වෙනස env විතරයි.
+  watchtower-gw:
+    build: ./foothold
+    container_name: rt_watchtower_gw
+    environment:
+      SSH_USER: ${GW_USER}
+      SSH_PASS: ${GW_PASS}
+    networks: [core, mon]
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  core:
+    driver: bridge
+    internal: true          # no outbound internet (egress-free)
+  mon:
+    driver: bridge
+    internal: true          # no outbound internet (egress-free)
